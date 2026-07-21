@@ -1,0 +1,8 @@
+CarlaAir_Data/
+Engine/
+*.exe
+*.pak
+PythonAPI/carla/dependencies/
+
+__pycache__/
+*.pyc
