@@ -1,3 +1,5 @@
+.env
+
 CarlaAir_Data/
 Engine/
 *.exe
@@ -6,3 +8,5 @@ PythonAPI/carla/dependencies/
 
 __pycache__/
 *.pyc
+
+*.log
