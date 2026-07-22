@@ -90,7 +90,7 @@ class AgenticAirSimDrone:
         )
 
         response = self.ai_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-flash-latest",
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
@@ -216,11 +216,11 @@ def update_airsim_settings(num_agents):
     }
 
     vehicles = {}
-    for i in range(1, num_agents + 1):
+    for i in range(2, num_agents + 1):
         vehicles[f"Drone{i}"] = {
             "VehicleType": "SimpleFlight",
             "AutoCreate": True,
-            "X": (i - 1) * SPACING,
+            "X": i * SPACING,
             "Y": 0.0,
             "Z": 0.0,
             "Cameras": camera_settings
@@ -245,7 +245,7 @@ def runtime_spawn_swarm(num_agents):
     Normally does nothing, since update_airsim_settings listed them all. This
     is for adding drones without restarting the simulator.
     """
-    if num_agents <= 1:
+    if num_agents < 1:
         return
 
     client = airsim.MultirotorClient()
@@ -264,7 +264,7 @@ def runtime_spawn_swarm(num_agents):
             vehicle_name=vehicle_name,
             vehicle_type="SimpleFlight",
             pose=airsim.Pose(
-                airsim.Vector3r((i - 1) * SPACING, 0.0, 0.0),
+                airsim.Vector3r(i * SPACING, 0.0, 0.0),
                 airsim.Quaternionr(0.0, 0.0, 0.0, 1.0)
             )
         )
