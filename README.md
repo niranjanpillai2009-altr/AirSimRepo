@@ -1,106 +1,78 @@
-# AirSim Drone Scripts
+# Natural-Language Drone Control in CARLA-Air
 
-My version of the CARLA-Air drone scripts. Type an instruction in plain English
-and Gemini turns it into drone commands.
+Control one or more simulated drones by typing instructions in plain English. An
+LLM turns the instruction into a short list of flight actions, the actions are
+validated, and each drone flies its plan — one drone or several at once.
 
-## What you need first
+This started as a replication of Ryle Traub's
+[AirSimRepo](https://github.com/rylet23/AirSimRepo), rewritten from scratch to
+understand it end to end and get it running on a new machine.
 
-Pull the latest code for AirSim and this repo.
-
-You need your own Google Gemini API key. Get one at
-https://aistudio.google.com/apikey.
-
-Make a file called `.env` next to the Python scripts with your key in it:
+## Example
 
 ```
-GEMINI_API_KEY=your_key_here
+$ python gemini_airsim_agent.py
+
+How many drones do you want? 2
+Press Enter once the map has loaded...
+
+What should Drone1 do? fly up and go forward for 5 seconds
+What should Drone2 do? hover for 5 seconds then fly forward
+
+[Gemini] Planning for Drone1...
+  2 step(s): fly_straight {'duration': 5.0}, hover {'duration': 2.0}
+[Gemini] Planning for Drone2...
+  2 step(s): hover {'duration': 5.0}, fly_straight {'duration': 3.0}
+
+[Coordinator] Done. 2 finished, 0 failed.
 ```
 
-Install the packages:
+## How it works
+
+The LLM is restricted to three actions — `fly_to`, `fly_straight`, `hover` — each
+with fixed parameters. Keeping the vocabulary tiny means the output is predictable
+and can be checked before any drone leaves the ground. Multiple drones run on
+separate threads so they fly simultaneously.
+
+## Getting started
+
+**New to this project? Start with [SETUP_GUIDE.md](SETUP_GUIDE.md)** — a complete
+from-scratch walkthrough: downloading the simulator, setting up the environment,
+and running your first flight. If you hit an error, [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+lists every problem encountered during setup and its fix.
+
+Quick version, once everything's installed:
 
 ```
-pip install airsim python-dotenv google-genai
+# Window 1 (CarlaAir folder):   conda activate carlaAir; .\CarlaAir.ps1 Town10HD
+# Window 2 (this repo folder):  conda activate carlaAir; python gemini_airsim_agent.py
 ```
 
-## Running the main script
+## The scripts
 
-**Step 1.** Open PowerShell and start the script:
-
-```
-python .\gemini_airsim_agent.py
-```
-
-**Step 2.** Type how many drones you want and press Enter.
-
-**Step 3.** Open the simulator (Town10HD) in a separate window. Wait until the
-map finishes loading and you can see the first drone.
-
-**Step 4.** Go back to the terminal and press Enter. Any extra drones get added
-to the map side by side.
-
-**Step 5.** Type what you want each drone to do, in plain English:
-
-- Drone 1: "fly up and go straight for 5 seconds"
-- Drone 2: "hover for 5 seconds then fly forward"
-
-The plan gets printed before anything flies, so you can check it looks right.
-
-**Step 6.** Watch them fly.
-
-## Camera controls
-
-The camera only follows Drone 1. Inside the simulator window:
-
-- **M** unlocks the camera so you can fly around and see the whole swarm
-- **Arrow keys** move around
-- **Page Up / Page Down** go higher and lower
-
-Switching the camera between drones doesn't work. Ryle ran into this too.
-
-## The other scripts
-
-Run these to test things separately. None of them need a Gemini key.
-
-| Script | What it does |
+| File | What it does |
 |---|---|
-| `test_flight.py` | Take off, fly forward, land. Run this first to check the connection works. |
-| `test_fly_forward.py` | Same but holds a fixed altitude and flies along the world X axis. |
-| `give_coords.py` | Prints the drone's position while you fly it manually. Use it to find coordinates. |
-| `move_to_coord.py` | Flies to coordinates set at the top of the file. |
+| `gemini_airsim_agent.py` | Main program — English → LLM → drone commands, single or multi-drone |
+| `Multiple.py` | Runs several drones concurrently, one thread each |
+| `test_flight.py` | Plain takeoff / forward / land, no AI. Run this first to check the connection. |
+| `test_fly_forward.py` | Fixed-altitude forward flight along the world X axis |
+| `move_to_coord.py` | Fly to a coordinate set in the file |
+| `give_coords.py` | Print the drone's live position while flying manually (to find coordinates) |
+
+## Requirements
+
+Windows 11, an NVIDIA GPU with Vulkan support, and a Google Gemini API key. Full
+details and versions are in the setup guide.
 
 ## Notes
 
-**Negative Z is up.** AirSim uses NED coordinates (north, east, down) so the
-third number points at the ground. `z = -8` is 8 metres in the air. Positive z
-is underground.
+- **Coordinates are NED:** `z` is negative going up (`z = -8` is 8 m altitude).
+- **Ports:** AirSim `41451`, CARLA `2000`.
+- The CARLA-Air simulator binary is not included here — it's downloaded separately
+  (see the setup guide). Only the drone-control code lives in this repo.
 
-**Two different ports.** AirSim is 41451, CARLA is 2000. They're separate
-servers and mixing them up gives a confusing error.
+## Roadmap
 
-**Velocity commands don't stop on their own.** After `moveByVelocityZAsync`
-runs out it keeps drifting, so every one is followed by `hoverAsync()` to brake.
-
-## Things I did differently to Ryle
-
-Flagging these in case there was a reason for the original way that I've missed.
-
-- **`settings.json` lists every drone.** In the original,
-  `update_airsim_settings` takes a drone count but only ever writes `Drone1` —
-  the count isn't used. Every other drone gets added afterwards with
-  `simAddVehicle`. Listing them upfront seemed simpler, but maybe runtime
-  spawning is deliberate so you can add drones without a restart.
-- **The settings path isn't hardcoded.** It pointed at
-  `C:\CarlaAir\CarlaAir-v0.1.7-Windows11-x86_64\AirSimConfig`. Mine writes to
-  `~/Documents/AirSim`, which is where AirSim looks by default. If the CarlaAir
-  build reads it from somewhere else, that's the line to change.
-- **Gemini's plan gets checked before takeoff** (`check_task_list`). The
-  original reads `params['x']` straight from the reply, so a missing value is a
-  `KeyError` partway through a mission with the drone already in the air.
-- **All the planning happens before any drone takes off**, so a bad instruction
-  gets caught while everything is still on the ground and you can retype it.
-
-## Status
-
-Not flown yet — I don't have the CarlaAir simulator build. Everything here is
-from reading the original and the AirSim docs, so it needs testing once I can
-run it.
+- [x] Replicate the original scripts and get them running
+- [x] Multi-drone flight from natural-language instructions
+- [ ] Swap the cloud LLM (Gemini) for a local open-source model
