@@ -22,6 +22,8 @@ class AgenticAirSimDrone:
         # The height the drone holds while moving. set_altitude and fly_to
         # update this so later moves keep whatever height it's at.
         self.altitude = ALTITUDE
+        # The ground level, recorded before takeoff so landing returns to it.
+        self.ground_z = 0.0
 
     def initialize_systems(self):
         print(f"[{self.vehicle_name}] Connecting...")
@@ -30,6 +32,14 @@ class AgenticAirSimDrone:
 
         self.client.enableApiControl(True, vehicle_name=self.vehicle_name)
         self.client.armDisarm(True, vehicle_name=self.vehicle_name)
+
+        # Record where the drone sits on the ground now, before it takes off,
+        # so landing can return to exactly this height (the ground isn't
+        # always at Z=0 and the drone doesn't collide with it).
+        self.ground_z = self.client.getMultirotorState(
+            vehicle_name=self.vehicle_name
+        ).kinematics_estimated.position.z_val
+        print(f"[{self.vehicle_name}] Ground level is Z={self.ground_z:.2f}")
 
         print(f"[{self.vehicle_name}] Taking off...")
         self.client.takeoffAsync(vehicle_name=self.vehicle_name).join()
@@ -108,49 +118,25 @@ class AgenticAirSimDrone:
     def execute_land(self):
         print(f"  |__ [{self.vehicle_name}] Landing...")
 
-        # Stage 1: fast descent while there's height to lose. A position move
-        # to 2 m above the take-off ground, at 5 m/s.
+        # The drone passes straight through the CARLA ground instead of
+        # colliding with it, so we can't wait for a physical stop. Instead we
+        # descend to the known ground level: Z = 0, where the drone spawned
+        # sitting on the ground before takeoff.
+
+        # Stage 1: fast descent while there's height to lose (down to 2 m up).
         self.client.moveToZAsync(
             -2.0, 5.0, vehicle_name=self.vehicle_name
         ).join()
 
-        # Stage 2: slow, soft final descent. We command a target well below any
-        # ground and let the drone ease down until the ground physically stops
-        # it. We don't use landAsync here because it misreads the hovering drone
-        # as already landed and returns mid-air. Instead we watch the vertical
-        # velocity: once the ground halts the descent (velocity ~ 0), it has
-        # actually touched down, so we cut the motors to keep it there.
-        start_z = self.client.getMultirotorState(
-            vehicle_name=self.vehicle_name
-        ).kinematics_estimated.position.z_val
-        print(f"  |__ [{self.vehicle_name}] Easing down (start Z={start_z:.2f})...")
+        # Stage 2: slow, gentle descent the final couple of metres to the
+        # ground level we recorded before takeoff.
+        self.client.moveToZAsync(
+            self.ground_z, 0.7, vehicle_name=self.vehicle_name
+        ).join()
 
-        self.client.moveToZAsync(10.0, 0.7, vehicle_name=self.vehicle_name)
-        time.sleep(2.0)  # let it get into a steady descent first
-
-        # Watch the altitude instead of the velocity - velocity readings are
-        # noisy at slow speed. If the height stops changing for about a second,
-        # the ground has stopped the drone, so it has actually landed.
-        last_z = None
-        still_count = 0
-        z = start_z
-        for tick in range(300):  # safety net: give up after ~60 s
-            z = self.client.getMultirotorState(
-                vehicle_name=self.vehicle_name
-            ).kinematics_estimated.position.z_val
-            if tick % 5 == 0:
-                print(f"       [{self.vehicle_name}] descending... Z={z:.2f}")
-            if last_z is not None and abs(z - last_z) < 0.03:
-                still_count += 1
-            else:
-                still_count = 0
-            if still_count >= 5:  # ~1 s of no movement = on the ground
-                break
-            last_z = z
-            time.sleep(0.2)
-
+        # Cut the motors so it stays settled on the ground.
         self.client.armDisarm(False, vehicle_name=self.vehicle_name)
-        print(f"  |__ [{self.vehicle_name}] Stopped at Z={z:.2f} (0 = ground level)")
+        print(f"  |__ [{self.vehicle_name}] Landed.")
         self.altitude = 0.0
 
     def interpret_user_prompt(self, user_prompt):
