@@ -203,6 +203,7 @@ class AgenticAirSimDrone:
         )
 
         raw = response["message"]["content"]
+        print(f"  [model raw output] {raw}")
         data = json.loads(raw)
 
         actions = extract_actions(data)
