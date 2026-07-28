@@ -151,16 +151,20 @@ class AgenticAirSimDrone:
         # colliding with it, so we can't wait for a physical stop. Instead we
         # descend to the ground level recorded before takeoff.
 
-        # Stage 1: fast descent to 2 m above the ACTUAL ground (ground_z - 2,
-        # since up is negative). This covers almost all the height quickly.
+        # Stage 1: fast descent to 4 m above the actual ground.
         self.client.moveToZAsync(
-            self.ground_z - 2.0, 6.0, vehicle_name=self.vehicle_name
+            self.ground_z - 4.0, 5.0, vehicle_name=self.vehicle_name
         ).join()
 
-        # Stage 2: slow, gentle descent the final couple of metres to the
-        # ground level we recorded before takeoff.
+        # Settle to kill the fast descent's momentum, otherwise it carries
+        # through and the final approach isn't actually slow.
+        self.client.hoverAsync(vehicle_name=self.vehicle_name).join()
+        time.sleep(0.5)
+
+        # Stage 2: slow, gentle descent the final few metres onto the ground -
+        # about 2-3 seconds of visibly slow motion at 1.5 m/s.
         self.client.moveToZAsync(
-            self.ground_z, 1.0, vehicle_name=self.vehicle_name
+            self.ground_z, 1.5, vehicle_name=self.vehicle_name
         ).join()
 
         # Cut the motors so it stays settled on the ground.
