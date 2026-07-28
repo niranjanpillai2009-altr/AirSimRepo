@@ -135,26 +135,37 @@ class AgenticAirSimDrone:
             "  any part. If the user mentions landing, you MUST end with a land\n"
             "  action. If they mention going back, you MUST include a fly_to.\n"
             "- ALWAYS reply with a JSON array, even for a single action.\n"
-            "- No markdown, no explanation, just the array.\n\n"
-            "Examples:\n"
-            "'hover for 2 seconds then land' ->\n"
-            '[{"action": "hover", "params": {"duration": 2.0}}, '
-            '{"action": "land", "params": {}}]\n'
-            "'fly backward 3 seconds, return home, then land' ->\n"
-            '[{"action": "fly_backward", "params": {"duration": 3.0}}, '
-            '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}, '
-            '{"action": "land", "params": {}}]'
+            "- No markdown, no explanation, just the array."
         )
+
+        # Few-shot examples: showing the model real input -> output pairs works
+        # far better than describing them, especially for a small local model
+        # that otherwise drops parts of the instruction.
+        examples = [
+            ("hover for 2 seconds then land",
+             '[{"action": "hover", "params": {"duration": 2.0}}, '
+             '{"action": "land", "params": {}}]'),
+            ("fly backward for 3 seconds, return home, then land",
+             '[{"action": "fly_backward", "params": {"duration": 3.0}}, '
+             '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}, '
+             '{"action": "land", "params": {}}]'),
+            ("go up to 15 meters and hover for 3 seconds",
+             '[{"action": "set_altitude", "params": {"z": -15.0}}, '
+             '{"action": "hover", "params": {"duration": 3.0}}]'),
+        ]
+
+        messages = [{"role": "system", "content": system_instruction}]
+        for ex_in, ex_out in examples:
+            messages.append({"role": "user", "content": ex_in})
+            messages.append({"role": "assistant", "content": ex_out})
+        messages.append({"role": "user", "content": user_prompt})
 
         # format="json" constrains the model to valid JSON. temperature 0 makes
         # it follow the instruction literally instead of getting creative and
         # dropping steps, which small models tend to do.
         response = ollama.chat(
             model=MODEL,
-            messages=[
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             format="json",
             options={"num_gpu": 0, "temperature": 0},
         )
