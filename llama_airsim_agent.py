@@ -131,16 +131,24 @@ class AgenticAirSimDrone:
             "- 'land' or 'touch down' means the land action, and it should be last.\n"
             "- Write repeated actions out one at a time. No loops.\n"
             "- Durations are seconds and must be greater than 0.\n"
+            "- Include ONE action for EVERY thing the user asks for. Do not skip\n"
+            "  any part. If the user mentions landing, you MUST end with a land\n"
+            "  action. If they mention going back, you MUST include a fly_to.\n"
             "- ALWAYS reply with a JSON array, even for a single action.\n"
             "- No markdown, no explanation, just the array.\n\n"
-            "Example - for 'fly backward 3 seconds, return home, then land':\n"
+            "Examples:\n"
+            "'hover for 2 seconds then land' ->\n"
+            '[{"action": "hover", "params": {"duration": 2.0}}, '
+            '{"action": "land", "params": {}}]\n'
+            "'fly backward 3 seconds, return home, then land' ->\n"
             '[{"action": "fly_backward", "params": {"duration": 3.0}}, '
             '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}, '
             '{"action": "land", "params": {}}]'
         )
 
-        # format="json" makes Ollama constrain the model to valid JSON, which
-        # small local models don't always produce on their own.
+        # format="json" constrains the model to valid JSON. temperature 0 makes
+        # it follow the instruction literally instead of getting creative and
+        # dropping steps, which small models tend to do.
         response = ollama.chat(
             model=MODEL,
             messages=[
@@ -148,7 +156,7 @@ class AgenticAirSimDrone:
                 {"role": "user", "content": user_prompt},
             ],
             format="json",
-            options={"num_gpu": 0},
+            options={"num_gpu": 0, "temperature": 0},
         )
 
         raw = response["message"]["content"]
