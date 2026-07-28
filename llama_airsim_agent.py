@@ -8,8 +8,9 @@ import ollama
 # Llama model through Ollama instead of Google's Gemini API. No API key, no
 # internet needed once the model is downloaded.
 
-ALTITUDE = -8.0        # negative is up
+ALTITUDE = -8.0        # default flying height, negative is up
 SPACING = 4.0          # metres between drones when they spawn
+MOVE_SPEED = 5.0       # m/s for directional moves
 MODEL = "llama3.1:8b"  # the local model Ollama runs
 
 
@@ -19,6 +20,9 @@ class AgenticAirSimDrone:
     def __init__(self, vehicle_name=""):
         self.vehicle_name = vehicle_name
         self.client = None
+        # The height the drone holds while moving. set_altitude and fly_to
+        # update this so later moves keep whatever height it's at.
+        self.altitude = ALTITUDE
 
     def initialize_systems(self):
         print(f"[{self.vehicle_name}] Connecting...")
@@ -34,9 +38,9 @@ class AgenticAirSimDrone:
         # takeoff barely leaves the ground, so climb to a set height. Every
         # drone starting at the same altitude keeps the swarm level.
         self.client.moveToZAsync(
-            z=ALTITUDE, velocity=3.0, vehicle_name=self.vehicle_name
+            z=self.altitude, velocity=3.0, vehicle_name=self.vehicle_name
         ).join()
-        print(f"[{self.vehicle_name}] Ready at {ALTITUDE} m.")
+        print(f"[{self.vehicle_name}] Ready at {self.altitude} m.")
 
     def get_telemetry(self):
         state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
@@ -45,23 +49,22 @@ class AgenticAirSimDrone:
               f"Y: {position.y_val:.2f}, Z: {position.z_val:.2f}")
         return position
 
-    def execute_fly_to(self, x, y, z, speed=4.0):
-        print(f"  |__ [{self.vehicle_name}] Flying to ({x}, {y}, {z})")
-        self.client.moveToPositionAsync(
-            x, y, z, speed, vehicle_name=self.vehicle_name
-        ).join()
+    # --- movement helper ---
 
-    def execute_fly_straight(self, duration, speed=5.0):
-        print(f"  |__ [{self.vehicle_name}] Forward for {duration}s")
+    def _move(self, vx, vy, duration, label):
+        """Fly in a direction for a set time, holding the current altitude.
 
-        # ForwardOnly turns the drone to face the way it's moving, and the z
-        # keeps it level instead of sinking as it tilts.
+        MaxDegreeOfFreedom + a fixed yaw of 0 means the drone keeps facing
+        the same way (north) and strafes in the requested direction, so
+        backward/left/right work without the drone spinning around.
+        """
+        print(f"  |__ [{self.vehicle_name}] {label} for {duration}s")
         self.client.moveByVelocityZAsync(
-            vx=speed,
-            vy=0.0,
-            z=ALTITUDE,
+            vx=vx,
+            vy=vy,
+            z=self.altitude,
             duration=duration,
-            drivetrain=airsim.DrivetrainType.ForwardOnly,
+            drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
             yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0),
             vehicle_name=self.vehicle_name
         ).join()
@@ -69,29 +72,71 @@ class AgenticAirSimDrone:
         # Velocity commands don't brake on their own.
         self.client.hoverAsync(vehicle_name=self.vehicle_name).join()
 
+    # --- actions ---
+
+    def execute_fly_to(self, x, y, z, speed=4.0):
+        print(f"  |__ [{self.vehicle_name}] Flying to ({x}, {y}, {z})")
+        self.client.moveToPositionAsync(
+            x, y, z, speed, vehicle_name=self.vehicle_name
+        ).join()
+        self.altitude = z  # hold this height for later moves
+
+    def execute_fly_straight(self, duration):
+        self._move(MOVE_SPEED, 0.0, duration, "Forward")
+
+    def execute_fly_backward(self, duration):
+        self._move(-MOVE_SPEED, 0.0, duration, "Backward")
+
+    def execute_fly_left(self, duration):
+        # y is "right" in NED, so left is negative y.
+        self._move(0.0, -MOVE_SPEED, duration, "Left")
+
+    def execute_fly_right(self, duration):
+        self._move(0.0, MOVE_SPEED, duration, "Right")
+
     def execute_hover(self, duration):
         print(f"  |__ [{self.vehicle_name}] Hovering {duration}s")
         self.client.hoverAsync(vehicle_name=self.vehicle_name).join()
         time.sleep(duration)
 
+    def execute_set_altitude(self, z):
+        print(f"  |__ [{self.vehicle_name}] Changing altitude to {z}")
+        self.altitude = z
+        self.client.moveToZAsync(
+            z, 3.0, vehicle_name=self.vehicle_name
+        ).join()
+
+    def execute_land(self):
+        print(f"  |__ [{self.vehicle_name}] Landing...")
+        self.client.landAsync(vehicle_name=self.vehicle_name).join()
+
     def interpret_user_prompt(self, user_prompt):
         system_instruction = (
             "You are a drone flight planner in a simulator.\n"
             "Turn the user's instruction into a JSON array of actions.\n\n"
-            "Only these three actions exist:\n"
+            "These are the ONLY actions you may use:\n"
             "1. {'action': 'fly_to', 'params': {'x': float, 'y': float, 'z': float}}\n"
-            "2. {'action': 'fly_straight', 'params': {'duration': float}}\n"
-            "3. {'action': 'hover', 'params': {'duration': float}}\n\n"
+            "2. {'action': 'fly_straight', 'params': {'duration': float}}   (forward)\n"
+            "3. {'action': 'fly_backward', 'params': {'duration': float}}\n"
+            "4. {'action': 'fly_left', 'params': {'duration': float}}\n"
+            "5. {'action': 'fly_right', 'params': {'duration': float}}\n"
+            "6. {'action': 'hover', 'params': {'duration': float}}\n"
+            "7. {'action': 'set_altitude', 'params': {'z': float}}   (go higher/lower)\n"
+            "8. {'action': 'land', 'params': {}}\n\n"
             "RULES:\n"
             f"- Z is altitude and NEGATIVE means up. Normal height is {ALTITUDE}.\n"
-            f"- 'go home' or 'come back' means fly_to x=0.0, y=0.0, z={ALTITUDE}.\n"
+            "- To go higher, use set_altitude with a MORE negative z (e.g. -15).\n"
+            "  To go lower, use a less negative z (e.g. -3).\n"
+            f"- 'go home' / 'return' / 'come back' means fly_to x=0.0, y=0.0, z={ALTITUDE}.\n"
+            "- 'land' or 'touch down' means the land action, and it should be last.\n"
             "- Write repeated actions out one at a time. No loops.\n"
             "- Durations are seconds and must be greater than 0.\n"
             "- ALWAYS reply with a JSON array, even for a single action.\n"
             "- No markdown, no explanation, just the array.\n\n"
-            "Example - for 'fly forward for 3 seconds then come back':\n"
-            '[{"action": "fly_straight", "params": {"duration": 3.0}}, '
-            '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}]'
+            "Example - for 'fly backward 3 seconds, return home, then land':\n"
+            '[{"action": "fly_backward", "params": {"duration": 3.0}}, '
+            '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}, '
+            '{"action": "land", "params": {}}]'
         )
 
         # format="json" makes Ollama constrain the model to valid JSON, which
@@ -123,14 +168,24 @@ class AgenticAirSimDrone:
             self.get_telemetry()
 
             action = step["action"]
-            params = step["params"]
+            params = step.get("params", {})
 
             if action == "fly_to":
                 self.execute_fly_to(params["x"], params["y"], params["z"])
             elif action == "fly_straight":
                 self.execute_fly_straight(params["duration"])
+            elif action == "fly_backward":
+                self.execute_fly_backward(params["duration"])
+            elif action == "fly_left":
+                self.execute_fly_left(params["duration"])
+            elif action == "fly_right":
+                self.execute_fly_right(params["duration"])
             elif action == "hover":
                 self.execute_hover(params["duration"])
+            elif action == "set_altitude":
+                self.execute_set_altitude(params["z"])
+            elif action == "land":
+                self.execute_land()
 
         print(f"[{self.vehicle_name}] Mission complete.")
 
@@ -151,7 +206,12 @@ class AgenticAirSimDrone:
 NEEDED_PARAMS = {
     "fly_to": ["x", "y", "z"],
     "fly_straight": ["duration"],
+    "fly_backward": ["duration"],
+    "fly_left": ["duration"],
+    "fly_right": ["duration"],
     "hover": ["duration"],
+    "set_altitude": ["z"],
+    "land": [],
 }
 
 
@@ -363,7 +423,7 @@ def main():
 
             print(f"  {len(task_list)} step(s):")
             for step in task_list:
-                print(f"    {step['action']} {step['params']}")
+                print(f"    {step['action']} {step.get('params', {})}")
 
             fleet_tasks[drone_name] = task_list
             break
