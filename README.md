@@ -77,4 +77,4 @@ details and versions are in the setup guide.
 
 - [x] Replicate the original scripts and get them running
 - [x] Multi-drone flight from natural-language instructions
-- [ ] Swap the cloud LLM (Gemini) for a local open-source model
+- [x] Swap the cloud LLM (Gemini) for a local open-source model
