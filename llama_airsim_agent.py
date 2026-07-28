@@ -87,7 +87,11 @@ class AgenticAirSimDrone:
             f"- 'go home' or 'come back' means fly_to x=0.0, y=0.0, z={ALTITUDE}.\n"
             "- Write repeated actions out one at a time. No loops.\n"
             "- Durations are seconds and must be greater than 0.\n"
-            "- Reply with only the JSON array. No markdown, no explanation."
+            "- ALWAYS reply with a JSON array, even for a single action.\n"
+            "- No markdown, no explanation, just the array.\n\n"
+            "Example - for 'fly forward for 3 seconds then come back':\n"
+            '[{"action": "fly_straight", "params": {"duration": 3.0}}, '
+            '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}]'
         )
 
         # format="json" makes Ollama constrain the model to valid JSON, which
@@ -99,19 +103,17 @@ class AgenticAirSimDrone:
                 {"role": "user", "content": user_prompt},
             ],
             format="json",
+            options={"num_gpu": 0},
         )
 
-        data = json.loads(response["message"]["content"])
+        raw = response["message"]["content"]
+        data = json.loads(raw)
 
-        # Asked for an array, but the model often wraps it in an object like
-        # {"actions": [...]}, so pull the list back out.
-        if isinstance(data, dict):
-            for value in data.values():
-                if isinstance(value, list):
-                    return check_task_list(value)
-            raise ValueError("No list of actions in the model's reply")
+        actions = extract_actions(data)
+        if actions is None:
+            raise ValueError(f"No list of actions in the model's reply: {raw}")
 
-        return check_task_list(data)
+        return check_task_list(actions)
 
     def execute_mission(self, task_list):
         print(f"\n[{self.vehicle_name}] Starting mission, {len(task_list)} steps.")
@@ -151,6 +153,38 @@ NEEDED_PARAMS = {
     "fly_straight": ["duration"],
     "hover": ["duration"],
 }
+
+
+def extract_actions(data):
+    """Pull the list of actions out of whatever shape the model returned.
+
+    Gemini reliably returned a clean array. A local model is messier - it might
+    return the array directly, wrap it in an object like {"actions": [...]},
+    return a single action object instead of a list, or nest it a level deeper.
+    This handles all of those. Returns a list, or None if nothing usable.
+    """
+    # Already a list of steps.
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict):
+        # A single action object, not wrapped in a list.
+        if "action" in data:
+            return [data]
+
+        # A value that is the list we want, e.g. {"actions": [...]}.
+        for value in data.values():
+            if isinstance(value, list):
+                return value
+
+        # The list is nested one level deeper, e.g. {"plan": {"steps": [...]}}.
+        for value in data.values():
+            if isinstance(value, dict):
+                found = extract_actions(value)
+                if found is not None:
+                    return found
+
+    return None
 
 
 def check_task_list(task_list):
