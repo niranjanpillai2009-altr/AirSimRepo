@@ -122,15 +122,25 @@ class AgenticAirSimDrone:
         # actually touched down, so we cut the motors to keep it there.
         print(f"  |__ [{self.vehicle_name}] Easing down to the ground...")
         self.client.moveToZAsync(10.0, 0.7, vehicle_name=self.vehicle_name)
-        time.sleep(1.0)  # let it start moving before we watch for a stop
+        time.sleep(2.0)  # let it get into a steady descent first
 
-        for _ in range(300):  # safety net: give up after ~30 s
-            vz = self.client.getMultirotorState(
+        # Watch the altitude instead of the velocity - velocity readings are
+        # noisy at slow speed. If the height stops changing for about a second,
+        # the ground has stopped the drone, so it has actually landed.
+        last_z = None
+        still_count = 0
+        for _ in range(300):  # safety net: give up after ~60 s
+            z = self.client.getMultirotorState(
                 vehicle_name=self.vehicle_name
-            ).kinematics_estimated.linear_velocity.z_val
-            if abs(vz) < 0.05:  # stopped descending = on the ground
+            ).kinematics_estimated.position.z_val
+            if last_z is not None and abs(z - last_z) < 0.03:
+                still_count += 1
+            else:
+                still_count = 0
+            if still_count >= 5:  # ~1 s of no movement = on the ground
                 break
-            time.sleep(0.1)
+            last_z = z
+            time.sleep(0.2)
 
         self.client.armDisarm(False, vehicle_name=self.vehicle_name)
         print(f"  |__ [{self.vehicle_name}] Landed.")
