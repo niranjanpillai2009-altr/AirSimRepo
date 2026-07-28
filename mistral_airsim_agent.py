@@ -13,6 +13,32 @@ SPACING = 4.0          # metres between drones when they spawn
 MOVE_SPEED = 5.0       # m/s for directional moves
 MODEL = "mistral-nemo"  # the local model Ollama runs (12B)
 
+# JSON schema forcing the model to return {"plan": [ ...steps... ]}. With plain
+# format="json" the models collapsed a multi-step request into a single action
+# object and dropped the rest; the schema makes them return the full list.
+PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "plan": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["fly_to", "fly_straight", "fly_backward",
+                                 "fly_left", "fly_right", "hover",
+                                 "set_altitude", "land"],
+                    },
+                    "params": {"type": "object"},
+                },
+                "required": ["action", "params"],
+            },
+        }
+    },
+    "required": ["plan"],
+}
+
 
 class AgenticAirSimDrone:
     """One drone. Connects, takes off, and runs a list of actions."""
@@ -123,8 +149,7 @@ class AgenticAirSimDrone:
 
         # The drone passes straight through the CARLA ground instead of
         # colliding with it, so we can't wait for a physical stop. Instead we
-        # descend to the known ground level: Z = 0, where the drone spawned
-        # sitting on the ground before takeoff.
+        # descend to the ground level recorded before takeoff.
 
         # Stage 1: fast descent while there's height to lose (down to 2 m up).
         self.client.moveToZAsync(
@@ -145,45 +170,39 @@ class AgenticAirSimDrone:
     def interpret_user_prompt(self, user_prompt):
         system_instruction = (
             "You are a drone flight planner in a simulator.\n"
-            "Turn the user's instruction into a JSON array of actions.\n\n"
-            "These are the ONLY actions you may use:\n"
-            "1. {'action': 'fly_to', 'params': {'x': float, 'y': float, 'z': float}}\n"
-            "2. {'action': 'fly_straight', 'params': {'duration': float}}   (forward)\n"
-            "3. {'action': 'fly_backward', 'params': {'duration': float}}\n"
-            "4. {'action': 'fly_left', 'params': {'duration': float}}\n"
-            "5. {'action': 'fly_right', 'params': {'duration': float}}\n"
-            "6. {'action': 'hover', 'params': {'duration': float}}\n"
-            "7. {'action': 'set_altitude', 'params': {'z': float}}   (go higher/lower)\n"
-            "8. {'action': 'land', 'params': {}}\n\n"
+            'Turn the user\'s instruction into a plan: a JSON object with a\n'
+            '"plan" array, one step per thing the user asks for.\n\n'
+            "The ONLY actions you may use:\n"
+            "- fly_to        params: x, y, z\n"
+            "- fly_straight  params: duration   (forward)\n"
+            "- fly_backward  params: duration\n"
+            "- fly_left      params: duration\n"
+            "- fly_right     params: duration\n"
+            "- hover         params: duration\n"
+            "- set_altitude  params: z          (go higher/lower)\n"
+            "- land          params: (empty)\n\n"
             "RULES:\n"
             f"- Z is altitude and NEGATIVE means up. Normal height is {ALTITUDE}.\n"
-            "- To go higher, use set_altitude with a MORE negative z (e.g. -15).\n"
-            "  To go lower, use a less negative z (e.g. -3).\n"
+            "- Higher = MORE negative z (e.g. -15); lower = less negative (e.g. -3).\n"
             f"- 'go home' / 'return' / 'come back' means fly_to x=0.0, y=0.0, z={ALTITUDE}.\n"
-            "- 'land' or 'touch down' means the land action, and it should be last.\n"
-            "- Write repeated actions out one at a time. No loops.\n"
-            "- Durations are seconds and must be greater than 0.\n"
-            "- Include ONE action for EVERY thing the user asks for. Do not skip\n"
-            "  any part. If the user mentions landing, you MUST end with a land\n"
-            "  action. If they mention going back, you MUST include a fly_to.\n"
-            "- ALWAYS reply with a JSON array, even for a single action.\n"
-            "- No markdown, no explanation, just the array."
+            "- 'land' or 'touch down' means the land action, placed last.\n"
+            "- Add ONE step for EVERY thing the user asks for. Never skip a part.\n"
+            "- Durations are seconds and must be greater than 0."
         )
 
-        # Few-shot examples: showing the model real input -> output pairs works
-        # far better than describing them, especially for a small local model
-        # that otherwise drops parts of the instruction.
+        # Few-shot examples: showing real input -> output pairs works far better
+        # than describing them, especially for a small local model.
         examples = [
             ("hover for 2 seconds then land",
-             '[{"action": "hover", "params": {"duration": 2.0}}, '
-             '{"action": "land", "params": {}}]'),
+             '{"plan": [{"action": "hover", "params": {"duration": 2.0}}, '
+             '{"action": "land", "params": {}}]}'),
             ("fly backward for 3 seconds, return home, then land",
-             '[{"action": "fly_backward", "params": {"duration": 3.0}}, '
+             '{"plan": [{"action": "fly_backward", "params": {"duration": 3.0}}, '
              '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}, '
-             '{"action": "land", "params": {}}]'),
+             '{"action": "land", "params": {}}]}'),
             ("go up to 15 meters and hover for 3 seconds",
-             '[{"action": "set_altitude", "params": {"z": -15.0}}, '
-             '{"action": "hover", "params": {"duration": 3.0}}]'),
+             '{"plan": [{"action": "set_altitude", "params": {"z": -15.0}}, '
+             '{"action": "hover", "params": {"duration": 3.0}}]}'),
         ]
 
         messages = [{"role": "system", "content": system_instruction}]
@@ -192,13 +211,13 @@ class AgenticAirSimDrone:
             messages.append({"role": "assistant", "content": ex_out})
         messages.append({"role": "user", "content": user_prompt})
 
-        # format="json" constrains the model to valid JSON. temperature 0 makes
-        # it follow the instruction literally instead of getting creative and
-        # dropping steps, which small models tend to do.
+        # format=PLAN_SCHEMA forces a {"plan": [...]} array so the model can't
+        # collapse a multi-step request into a single action. temperature 0
+        # keeps it literal.
         response = ollama.chat(
             model=MODEL,
             messages=messages,
-            format="json",
+            format=PLAN_SCHEMA,
             options={"num_gpu": 0, "temperature": 0},
         )
 
@@ -270,26 +289,21 @@ NEEDED_PARAMS = {
 def extract_actions(data):
     """Pull the list of actions out of whatever shape the model returned.
 
-    Gemini reliably returned a clean array. A local model is messier - it might
-    return the array directly, wrap it in an object like {"actions": [...]},
-    return a single action object instead of a list, or nest it a level deeper.
-    This handles all of those. Returns a list, or None if nothing usable.
+    Handles the {"plan": [...]} object the schema asks for, a bare array, a
+    single action object, or a list nested a level deeper. Returns a list, or
+    None if nothing usable.
     """
-    # Already a list of steps.
     if isinstance(data, list):
         return data
 
     if isinstance(data, dict):
-        # A single action object, not wrapped in a list.
         if "action" in data:
             return [data]
 
-        # A value that is the list we want, e.g. {"actions": [...]}.
         for value in data.values():
             if isinstance(value, list):
                 return value
 
-        # The list is nested one level deeper, e.g. {"plan": {"steps": [...]}}.
         for value in data.values():
             if isinstance(value, dict):
                 found = extract_actions(value)
@@ -303,8 +317,7 @@ def check_task_list(task_list):
     """Checks the model's plan before any of it gets flown.
 
     By the time a mission runs the drone is already in the air, so a missing
-    value would crash the script mid-flight with the drone still up. This
-    matters even more with a local model, which is messier than Gemini.
+    value would crash the script mid-flight with the drone still up.
     """
     if not isinstance(task_list, list):
         raise ValueError("Expected a list of actions")
@@ -390,10 +403,11 @@ def update_airsim_settings(num_agents):
 
 
 def runtime_spawn_swarm(num_agents):
-    """Adds any drones that aren't already in the map.
+    """Makes sure every drone the run needs exists in the simulator.
 
-    Normally does nothing, since update_airsim_settings listed them all. This
-    is for adding drones without restarting the simulator.
+    Spawns any Drone1..DroneN that isn't already there. Normally Drone1 comes
+    from the simulator's own settings, but spawning it here too means the run
+    still works if the settings got reset - it just skips ones that exist.
     """
     if num_agents < 1:
         return
