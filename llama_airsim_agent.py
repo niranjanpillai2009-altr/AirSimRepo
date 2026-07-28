@@ -108,7 +108,15 @@ class AgenticAirSimDrone:
 
     def execute_land(self):
         print(f"  |__ [{self.vehicle_name}] Landing...")
+        # landAsync alone is very slow from high up, and it can return before
+        # the drone actually touches down (so control gets released mid-air).
+        # Drop quickly to just above the ground first with a position move
+        # (which reliably finishes), then let landAsync do the final touch down.
+        self.client.moveToZAsync(
+            -2.0, 5.0, vehicle_name=self.vehicle_name
+        ).join()
         self.client.landAsync(vehicle_name=self.vehicle_name).join()
+        self.altitude = 0.0
 
     def interpret_user_prompt(self, user_prompt):
         system_instruction = (
