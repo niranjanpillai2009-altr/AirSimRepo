@@ -107,14 +107,33 @@ class AgenticAirSimDrone:
 
     def execute_land(self):
         print(f"  |__ [{self.vehicle_name}] Landing...")
-        # landAsync alone is very slow from high up, and it can return before
-        # the drone actually touches down (so control gets released mid-air).
-        # Drop quickly to just above the ground first with a position move
-        # (which reliably finishes), then let landAsync do the final touch down.
+
+        # Stage 1: fast descent while there's height to lose. A position move
+        # to 2 m above the take-off ground, at 5 m/s.
         self.client.moveToZAsync(
             -2.0, 5.0, vehicle_name=self.vehicle_name
         ).join()
-        self.client.landAsync(vehicle_name=self.vehicle_name).join()
+
+        # Stage 2: slow, soft final descent. We command a target well below any
+        # ground and let the drone ease down until the ground physically stops
+        # it. We don't use landAsync here because it misreads the hovering drone
+        # as already landed and returns mid-air. Instead we watch the vertical
+        # velocity: once the ground halts the descent (velocity ~ 0), it has
+        # actually touched down, so we cut the motors to keep it there.
+        print(f"  |__ [{self.vehicle_name}] Easing down to the ground...")
+        self.client.moveToZAsync(10.0, 0.7, vehicle_name=self.vehicle_name)
+        time.sleep(1.0)  # let it start moving before we watch for a stop
+
+        for _ in range(300):  # safety net: give up after ~30 s
+            vz = self.client.getMultirotorState(
+                vehicle_name=self.vehicle_name
+            ).kinematics_estimated.linear_velocity.z_val
+            if abs(vz) < 0.05:  # stopped descending = on the ground
+                break
+            time.sleep(0.1)
+
+        self.client.armDisarm(False, vehicle_name=self.vehicle_name)
+        print(f"  |__ [{self.vehicle_name}] Landed.")
         self.altitude = 0.0
 
     def interpret_user_prompt(self, user_prompt):
