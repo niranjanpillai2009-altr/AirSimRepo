@@ -2,15 +2,16 @@ import os
 import json
 import time
 import airsim
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+import ollama
 
-load_dotenv()
+# Same program as gemini_airsim_agent.py, but the planning is done by a local
+# Mistral (mistral-nemo) model through Ollama instead of Google's Gemini API.
+# No API key, no internet needed once the model is downloaded.
 
 ALTITUDE = -8.0        # default flying height, negative is up
 SPACING = 4.0          # metres between drones when they spawn
 MOVE_SPEED = 5.0       # m/s for directional moves
+MODEL = "mistral-nemo"  # the local model Ollama runs (12B)
 
 
 class AgenticAirSimDrone:
@@ -162,28 +163,51 @@ class AgenticAirSimDrone:
             "- 'land' or 'touch down' means the land action, and it should be last.\n"
             "- Write repeated actions out one at a time. No loops.\n"
             "- Durations are seconds and must be greater than 0.\n"
+            "- Include ONE action for EVERY thing the user asks for. Do not skip\n"
+            "  any part. If the user mentions landing, you MUST end with a land\n"
+            "  action. If they mention going back, you MUST include a fly_to.\n"
             "- ALWAYS reply with a JSON array, even for a single action.\n"
-            "- Reply with only the JSON array. No markdown, no explanation.\n\n"
-            "Example - for 'fly backward 3 seconds, return home, then land':\n"
-            '[{"action": "fly_backward", "params": {"duration": 3.0}}, '
-            '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}, '
-            '{"action": "land", "params": {}}]'
+            "- No markdown, no explanation, just the array."
         )
 
-        response = self.ai_client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json"
-            ),
+        # Few-shot examples: showing the model real input -> output pairs works
+        # far better than describing them, especially for a small local model
+        # that otherwise drops parts of the instruction.
+        examples = [
+            ("hover for 2 seconds then land",
+             '[{"action": "hover", "params": {"duration": 2.0}}, '
+             '{"action": "land", "params": {}}]'),
+            ("fly backward for 3 seconds, return home, then land",
+             '[{"action": "fly_backward", "params": {"duration": 3.0}}, '
+             '{"action": "fly_to", "params": {"x": 0.0, "y": 0.0, "z": -8.0}}, '
+             '{"action": "land", "params": {}}]'),
+            ("go up to 15 meters and hover for 3 seconds",
+             '[{"action": "set_altitude", "params": {"z": -15.0}}, '
+             '{"action": "hover", "params": {"duration": 3.0}}]'),
+        ]
+
+        messages = [{"role": "system", "content": system_instruction}]
+        for ex_in, ex_out in examples:
+            messages.append({"role": "user", "content": ex_in})
+            messages.append({"role": "assistant", "content": ex_out})
+        messages.append({"role": "user", "content": user_prompt})
+
+        # format="json" constrains the model to valid JSON. temperature 0 makes
+        # it follow the instruction literally instead of getting creative and
+        # dropping steps, which small models tend to do.
+        response = ollama.chat(
+            model=MODEL,
+            messages=messages,
+            format="json",
+            options={"num_gpu": 0, "temperature": 0},
         )
 
-        data = json.loads(response.text)
+        raw = response["message"]["content"]
+        data = json.loads(raw)
 
         actions = extract_actions(data)
         if actions is None:
-            raise ValueError("No list of actions in the model's reply")
+            raise ValueError(f"No list of actions in the model's reply: {raw}")
 
         return check_task_list(actions)
 
@@ -245,21 +269,26 @@ NEEDED_PARAMS = {
 def extract_actions(data):
     """Pull the list of actions out of whatever shape the model returned.
 
-    Handles a bare array, an object wrapping one like {"actions": [...]}, a
-    single action object, or a list nested a level deeper. Returns a list, or
-    None if nothing usable.
+    Gemini reliably returned a clean array. A local model is messier - it might
+    return the array directly, wrap it in an object like {"actions": [...]},
+    return a single action object instead of a list, or nest it a level deeper.
+    This handles all of those. Returns a list, or None if nothing usable.
     """
+    # Already a list of steps.
     if isinstance(data, list):
         return data
 
     if isinstance(data, dict):
+        # A single action object, not wrapped in a list.
         if "action" in data:
             return [data]
 
+        # A value that is the list we want, e.g. {"actions": [...]}.
         for value in data.values():
             if isinstance(value, list):
                 return value
 
+        # The list is nested one level deeper, e.g. {"plan": {"steps": [...]}}.
         for value in data.values():
             if isinstance(value, dict):
                 found = extract_actions(value)
@@ -273,7 +302,8 @@ def check_task_list(task_list):
     """Checks the model's plan before any of it gets flown.
 
     By the time a mission runs the drone is already in the air, so a missing
-    value would crash the script mid-flight with the drone still up.
+    value would crash the script mid-flight with the drone still up. This
+    matters even more with a local model, which is messier than Gemini.
     """
     if not isinstance(task_list, list):
         raise ValueError("Expected a list of actions")
@@ -390,10 +420,14 @@ def runtime_spawn_swarm(num_agents):
 
 
 def main():
-    if not os.getenv("GEMINI_API_KEY"):
-        print("Error: GEMINI_API_KEY not found.")
-        print("Make a file called .env next to this script containing:")
-        print("    GEMINI_API_KEY=your_key_here")
+    # Quick check that Ollama is running and the model is available before we
+    # get the simulator involved.
+    try:
+        ollama.show(MODEL)
+    except Exception:
+        print(f"Error: couldn't reach the model '{MODEL}'.")
+        print("Make sure Ollama is installed and running, and that you've run:")
+        print(f"    ollama pull {MODEL}")
         return
 
     try:
@@ -416,7 +450,6 @@ def main():
     # All the planning happens before anything takes off, so a bad
     # instruction gets caught while the drones are still on the ground.
     planner = AgenticAirSimDrone()
-    planner.ai_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
     fleet_tasks = {}
 
@@ -430,7 +463,7 @@ def main():
                 print("  Can't be empty.")
                 continue
 
-            print(f"[Gemini] Planning for {drone_name}...")
+            print(f"[Mistral] Planning for {drone_name}...")
 
             try:
                 task_list = planner.interpret_user_prompt(user_prompt)

@@ -35,8 +35,10 @@ class AgenticAirSimDrone:
         self.client.armDisarm(True, vehicle_name=self.vehicle_name)
 
         # Record where the drone sits on the ground now, before it takes off,
-        # so landing can return to exactly this height (the ground isn't
-        # always at Z=0 and the drone doesn't collide with it).
+        # so landing can return to exactly this height. The ground isn't always
+        # at Z=0 (it depends on the terrain the drone spawned on) and the drone
+        # doesn't collide with it, so this recorded value is what makes landing
+        # come down onto the actual surface.
         self.ground_z = self.client.getMultirotorState(
             vehicle_name=self.vehicle_name
         ).kinematics_estimated.position.z_val
