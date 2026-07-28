@@ -166,3 +166,71 @@ outdated drivers are the most common cause of Vulkan launch failures.
 Noted by the original author too. It's documented CARLA-Air / AirSim behavior, not a
 bug in this code. Workaround: press `M` in the sim window for a free camera and fly
 around manually.
+
+---
+
+## Local LLM issues (llama / mistral agents)
+
+### `ModuleNotFoundError: No module named 'ollama'`
+
+**Fix:** `python -m pip install ollama` in the `carlaAir` environment.
+
+---
+
+### `Error: couldn't reach the model '...'`
+
+**Cause:** Ollama isn't running, or the model wasn't pulled.
+**Fix:** make sure Ollama is installed and running, then:
+```
+ollama pull llama3.1:8b
+ollama pull mistral-nemo
+```
+
+---
+
+### The local model drops steps (says "hover then land" but only hovers)
+
+**Cause:** with plain JSON output the model collapses a multi-step request into a
+single action object, e.g. `{"action": "hover", "params": {"duration": 3}}`, and
+drops the rest. Both the 8B and 12B models did this.
+**Fix:** the local agents pass a **JSON schema** (`PLAN_SCHEMA`) to Ollama instead
+of `format="json"`, which forces a `{"plan": [...]}` array of steps. This fixed
+both models. Prompt tweaks and temperature alone did not. See
+[LOCAL_LLM.md](LOCAL_LLM.md) for the full write-up.
+
+---
+
+### The local model runs very slowly / drains the battery
+
+**Cause:** the model runs on the CPU (so the GPU stays free for the simulator),
+and CPU inference is heavy. Running the simulator at the same time is a lot of
+combined load.
+**Fix:** keep the laptop plugged in. A smaller model (`llama3.2:3b`) is much
+lighter if speed/heat is a problem. The model only works hard during planning
+(before takeoff), not continuously.
+
+---
+
+## Flight behavior issues
+
+### `Vehicle API for 'Drone1' is not available ... this vehicle does not exist`
+
+**Cause:** the running simulator has no `Drone1`. The default drone is named
+`SimpleFlight`, and the rename in settings.json can get reset on a sim restart.
+**Fix:** the agents now spawn `Drone1` at runtime if it isn't already there
+(`runtime_spawn_swarm` starts from Drone1 and skips any that exist), so this
+self-heals. If you'd rather have exactly the drones you asked for with no extra
+idle one, rename `SimpleFlight` to `Drone1` in both settings.json files and
+restart the sim.
+
+---
+
+### The drone flies through the ground when landing / lands in mid-air
+
+**Cause:** the CARLA-Air drone doesn't collide with the terrain — it passes
+straight through. So "descend until it hits the ground" never triggers, and
+`landAsync` misreads a hovering drone as already landed and stops mid-air.
+**Fix:** landing records the drone's ground height *before* takeoff and descends
+back to it: fast from high up, a brief settle to kill momentum, then a slow gentle
+final approach. The ground height varies by spawn location, so it must be recorded
+per run, not assumed to be Z=0.

@@ -29,10 +29,25 @@ What should Drone2 do? hover for 5 seconds then fly forward
 
 ## How it works
 
-The LLM is restricted to three actions — `fly_to`, `fly_straight`, `hover` — each
-with fixed parameters. Keeping the vocabulary tiny means the output is predictable
-and can be checked before any drone leaves the ground. Multiple drones run on
-separate threads so they fly simultaneously.
+The LLM is restricted to a fixed set of actions (`fly_to`, `fly_straight`,
+`fly_backward`, `fly_left`, `fly_right`, `hover`, `set_altitude`, `land`), each
+with fixed parameters. Keeping the vocabulary small and structured means the
+output is predictable and can be checked before any drone leaves the ground.
+Multiple drones run on separate threads so they fly simultaneously.
+
+## Cloud or local — three planners
+
+The same program runs with either a cloud model or a local one:
+
+| Script | Planner | Runs on |
+|---|---|---|
+| `gemini_airsim_agent.py` | Gemini | Google's servers (needs API key) |
+| `llama_airsim_agent.py` | Llama 3.1 8B | Your machine (Ollama, offline) |
+| `mistral_airsim_agent.py` | Mistral-Nemo 12B | Your machine (Ollama, offline) |
+
+The local versions need no API key or internet once the model is downloaded. See
+**[LOCAL_LLM.md](LOCAL_LLM.md)** for setup, how they compare, and what it took to
+get local models producing reliable multi-step plans.
 
 ## Getting started
 
@@ -52,7 +67,9 @@ Quick version, once everything's installed:
 
 | File | What it does |
 |---|---|
-| `gemini_airsim_agent.py` | Main program — English → LLM → drone commands, single or multi-drone |
+| `gemini_airsim_agent.py` | Main program (Gemini) — English → LLM → drone commands, single or multi-drone |
+| `llama_airsim_agent.py` | Same, using a local Llama 3.1 8B model via Ollama |
+| `mistral_airsim_agent.py` | Same, using a local Mistral-Nemo 12B model via Ollama |
 | `Multiple.py` | Runs several drones concurrently, one thread each |
 | `test_flight.py` | Plain takeoff / forward / land, no AI. Run this first to check the connection. |
 | `test_fly_forward.py` | Fixed-altitude forward flight along the world X axis |
@@ -70,11 +87,11 @@ details and versions are in the setup guide.
 - **Ports:** AirSim `41451`, CARLA `2000`.
 - The CARLA-Air simulator binary is not included here — it's downloaded separately
   (see the setup guide). Only the drone-control code lives in this repo.
-- Here is a link to some example videos on the gemini agent running with different prompts:
-  https://www.mediafire.com/folder/ta9erqa13mxja/AI+AirSim+Vids
 
 ## Roadmap
 
 - [x] Replicate the original scripts and get them running
 - [x] Multi-drone flight from natural-language instructions
-- [x] Swap the cloud LLM (Gemini) for a local open-source model
+- [x] Swap the cloud LLM (Gemini) for a local open-source model (Llama, Mistral)
+- [x] Expanded action set (landing, directional movement, altitude)
+- [ ] Add turning / heading control
