@@ -102,7 +102,7 @@ parameters, non-numeric values, and non-positive durations are all rejected.
 
 ---
 
-## What we learned (the interesting part)
+## What was learned
 
 ### Local models drop steps unless you force structure
 
