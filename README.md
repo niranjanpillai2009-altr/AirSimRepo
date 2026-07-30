@@ -87,6 +87,7 @@ details and versions are in the setup guide.
 - **Ports:** AirSim `41451`, CARLA `2000`.
 - The CARLA-Air simulator binary is not included here — it's downloaded separately
   (see the setup guide). Only the drone-control code lives in this repo.
+- Some demo videos of gemini and llama airsim agents working: https://www.mediafire.com/folder/ta9erqa13mxja/AI+AirSim+Vids
 
 ## Roadmap
 
