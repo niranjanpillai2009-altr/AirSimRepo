@@ -4,9 +4,6 @@ Control one or more simulated drones by typing instructions in plain English. An
 LLM turns the instruction into a short list of flight actions, the actions are
 validated, and each drone flies its plan — one drone or several at once.
 
-This started as a replication of Ryle Traub's
-[AirSimRepo](https://github.com/rylet23/AirSimRepo), rewritten from scratch to
-understand it end to end and get it running on a new machine.
 
 ## Example
 
